@@ -288,7 +288,7 @@ if __name__ == '__main__':
         VS = list(zip(X_VS, y_VS))
 
         # Changing 0 to 1 ratio in learning samples
-        ratio = 9
+        ratio = 15
         LS0 = []
         LS1 = []
         for (x, y) in LS:
