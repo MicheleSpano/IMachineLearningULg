@@ -20,7 +20,6 @@ from rdkit.Chem import AllChem, MACCSkeys
 import random
 
 
-
 @contextmanager
 def measure_time(label):
     """
@@ -63,8 +62,6 @@ def load_from_csv(path, delimiter=','):
     return pd.read_csv(path, delimiter=delimiter)
 
 
-
-
 def create_fingerprints(chemical_compounds, fptype="rdkit"):
     """
     Create a learning matrix `X` with (Morgan) fingerprints
@@ -90,15 +87,17 @@ def create_fingerprints(chemical_compounds, fptype="rdkit"):
     X4 = np.zeros((n_chem, 2048))
     for i in range(n_chem):
         m = Chem.MolFromSmiles(chemical_compounds[i])
-        X[i,:] = AllChem.GetMorganFingerprintAsBitVect(m, 3, nBits=512, useFeatures=True)
-        X2[i,:] = Chem.MACCSkeys.GenMACCSKeys(m)
-        X3[i,:] = Chem.RDKFingerprint(m)
-        X4[i,:] = Chem.LayeredFingerprint(m)
-    Xret = np.concatenate((X,X2,X3,X4), axis=1)
+        X[i, :] = AllChem.GetMorganFingerprintAsBitVect(m, 3, nBits=512,
+                                                        useFeatures=True)
+        X2[i, :] = Chem.MACCSkeys.GenMACCSKeys(m)
+        X3[i, :] = Chem.RDKFingerprint(m)
+        X4[i, :] = Chem.LayeredFingerprint(m)
+    Xret = np.concatenate((X, X2, X3, X4), axis=1)
     return Xret
 
 
-def make_submission(y_predicted, auc_predicted, file_name="submission", date=True, indexes=None):
+def make_submission(y_predicted, auc_predicted, file_name="submission",
+                    date=True, indexes=None):
     """
     Write a submission file for the Kaggle platform
 
@@ -135,9 +134,9 @@ def make_submission(y_predicted, auc_predicted, file_name="submission", date=Tru
     # Writing into the file
     with open(file_name, 'w') as handle:
         handle.write('"Chem_ID","Prediction"\n')
-        handle.write('Chem_{:d},{}\n'.format(0,auc_predicted))
+        handle.write('Chem_{:d},{}\n'.format(0, auc_predicted))
 
-        for n,idx in enumerate(indexes):
+        for n, idx in enumerate(indexes):
 
             if np.isnan(y_predicted[n]):
                 raise ValueError('The prediction cannot be NaN')
@@ -145,33 +144,37 @@ def make_submission(y_predicted, auc_predicted, file_name="submission", date=Tru
             handle.write(line)
     return file_name
 
+
 def plot_roc_auc(labels, predictions):
     fpr, tpr, _ = roc_curve(labels, predictions)
 
     plt.title('Receiver Operating Characteristic')
-    plt.plot(fpr, tpr, 'b', label = 'AUC = %0.2f' % best_model["auc"])
-    plt.legend(loc = 'lower right')
-    plt.plot([0, 1], [0, 1],'r--')
+    plt.plot(fpr, tpr, 'b', label='AUC = %0.2f' % best_model["auc"])
+    plt.legend(loc='lower right')
+    plt.plot([0, 1], [0, 1], 'r--')
     plt.xlim([0, 1])
     plt.ylim([0, 1])
     plt.ylabel('True Positive Rate')
     plt.xlabel('False Positive Rate')
     plt.show()
 
+
 def plot_cm(labels, predictions, p=0.5):
     cm = confusion_matrix(labels, predictions > p)
-    plt.figure(figsize=(5,5))
+    plt.figure(figsize=(5, 5))
     sns.heatmap(cm, annot=True, fmt="d")
     plt.title('Confusion matrix @{:.2f}'.format(p))
     plt.ylabel('Actual label')
     plt.xlabel('Predicted label')
 
     print('Legitimate Transactions Detected (True Negatives): ', cm[0][0])
-    print('Legitimate Transactions Incorrectly Detected (False Positives): ', cm[0][1])
+    print('Legitimate Transactions Incorrectly Detected (False Positives): ',
+          cm[0][1])
     print('Fraudulent Transactions Missed (False Negatives): ', cm[1][0])
     print('Fraudulent Transactions Detected (True Positives): ', cm[1][1])
     print('Total Fraudulent Transactions: ', np.sum(cm[1]))
     plt.show()
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Make a toy submission")
@@ -205,8 +208,9 @@ if __name__ == '__main__':
 
     # Splitting
     with measure_time("Splitting and shuffling the datas"):
-        X_LS, X_VS, y_LS, y_VS = train_test_split(X_WholeSet, y_WholeSet, test_size=0.33, random_state=42)
-
+        X_LS, X_VS, y_LS, y_VS = train_test_split(X_WholeSet, y_WholeSet,
+                                                  test_size=0.33,
+                                                  random_state=42)
 
     WS = list(zip(X_WholeSet, y_WholeSet))
     LS = list(zip(X_LS, y_LS))
@@ -233,16 +237,18 @@ if __name__ == '__main__':
     X_VS, y_VS = zip(*VS)
 
     # Model creation and assessment
-    models=[]
+    models = []
     with measure_time("Creating and assessing the models"):
         for param1 in [8000]:
             for param2 in ['balanced']:
                 for param3 in [None]:
                     for param4 in ["not defined"]:
-                        model = RandomForestClassifier(n_estimators=param1, class_weight=param2, max_depth=param3)
+                        model = RandomForestClassifier(n_estimators=param1,
+                                                       class_weight=param2,
+                                                       max_depth=param3)
                         model.fit(X_LS, y_LS)
 
-                        y_predict = model.predict_proba(X_VS)[:,1]
+                        y_predict = model.predict_proba(X_VS)[:, 1]
                         auc = roc_auc_score(y_VS, y_predict)
 
                         models += [{"model": model,
@@ -259,7 +265,6 @@ if __name__ == '__main__':
         if(model["auc"] >= best_model["auc"]):
             best_model = model
 
-
     print("------BEST MODEL-------")
     print("param1="+str(best_model["param1"]))
     print("param2="+str(best_model["param2"]))
@@ -268,16 +273,13 @@ if __name__ == '__main__':
     print("auc="+str(best_model["auc"]))
     print("-----------------------")
 
-
     # Plotting charts
     plot_cm(y_VS, y_predict)
     plot_roc_auc(y_VS, y_predict)
 
-
     # Best model fitting
     with measure_time("Fitting the best model"):
         best_model["model"].fit(X_WS, y_WS)
-
 
     # Changing 0 to 1 ratio in final sample
     WS = list(zip(X_WS, y_WS))
@@ -293,7 +295,7 @@ if __name__ == '__main__':
     random.shuffle(WS)
 
     # Predicting and submitting
-    y_pred = best_model["model"].predict_proba(X_TS)[:,1]
+    y_pred = best_model["model"].predict_proba(X_TS)[:, 1]
 
     fname = make_submission(y_pred, best_model["auc"]-0.06, 'random_forest')
     print('Submission file "{}" successfully written'.format(fname))
