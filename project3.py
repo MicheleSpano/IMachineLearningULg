@@ -6,24 +6,19 @@ import time
 import datetime
 import argparse
 from contextlib import contextmanager
-
-
 import pandas as pd
 import numpy as np
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.utils import check_random_state
-from sklearn.ensemble import BaggingClassifier
-from sklearn.svm import SVC
-from sklearn.ensemble import AdaBoostClassifier
-from sklearn.ensemble import GradientBoostingRegressor
-from keras.layers import Dense, Dropout, Activation, Flatten
-from keras.utils import np_utils
-from keras.models import Sequential
+import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.ensemble import RandomForestClassifier
-
-
+from sklearn.feature_selection import SelectKBest, chi2
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, roc_auc_score, roc_curve, auc
+from sklearn.utils import check_random_state
 from rdkit import Chem
-from rdkit.Chem import AllChem
+from rdkit.Chem import AllChem, MACCSkeys
+import random
+
 
 
 @contextmanager
@@ -70,7 +65,7 @@ def load_from_csv(path, delimiter=','):
 
 
 
-def create_fingerprints(chemical_compounds):
+def create_fingerprints(chemical_compounds, fptype="rdkit"):
     """
     Create a learning matrix `X` with (Morgan) fingerprints
     from the `chemical_compounds` molecular structures.
@@ -89,14 +84,18 @@ def create_fingerprints(chemical_compounds):
     """
     n_chem = chemical_compounds.shape[0]
 
-    nBits = 124
-    X = np.zeros((n_chem, nBits))
-
+    X = np.zeros((n_chem, 512))
+    X2 = np.zeros((n_chem, 167))
+    X3 = np.zeros((n_chem, 2048))
+    X4 = np.zeros((n_chem, 2048))
     for i in range(n_chem):
         m = Chem.MolFromSmiles(chemical_compounds[i])
-        X[i,:] = AllChem.GetMorganFingerprintAsBitVect(m,2,nBits=124)
-
-    return X
+        X[i,:] = AllChem.GetMorganFingerprintAsBitVect(m, 3, nBits=512, useFeatures=True)
+        X2[i,:] = Chem.MACCSkeys.GenMACCSKeys(m)
+        X3[i,:] = Chem.RDKFingerprint(m)
+        X4[i,:] = Chem.LayeredFingerprint(m)
+    Xret = np.concatenate((X,X2,X3,X4), axis=1)
+    return Xret
 
 
 def make_submission(y_predicted, auc_predicted, file_name="submission", date=True, indexes=None):
@@ -146,7 +145,33 @@ def make_submission(y_predicted, auc_predicted, file_name="submission", date=Tru
             handle.write(line)
     return file_name
 
+def plot_roc_auc(labels, predictions):
+    fpr, tpr, _ = roc_curve(labels, predictions)
 
+    plt.title('Receiver Operating Characteristic')
+    plt.plot(fpr, tpr, 'b', label = 'AUC = %0.2f' % best_model["auc"])
+    plt.legend(loc = 'lower right')
+    plt.plot([0, 1], [0, 1],'r--')
+    plt.xlim([0, 1])
+    plt.ylim([0, 1])
+    plt.ylabel('True Positive Rate')
+    plt.xlabel('False Positive Rate')
+    plt.show()
+
+def plot_cm(labels, predictions, p=0.5):
+    cm = confusion_matrix(labels, predictions > p)
+    plt.figure(figsize=(5,5))
+    sns.heatmap(cm, annot=True, fmt="d")
+    plt.title('Confusion matrix @{:.2f}'.format(p))
+    plt.ylabel('Actual label')
+    plt.xlabel('Predicted label')
+
+    print('Legitimate Transactions Detected (True Negatives): ', cm[0][0])
+    print('Legitimate Transactions Incorrectly Detected (False Positives): ', cm[0][1])
+    print('Fraudulent Transactions Missed (False Negatives): ', cm[1][0])
+    print('Fraudulent Transactions Detected (True Positives): ', cm[1][1])
+    print('Total Fraudulent Transactions: ', np.sum(cm[1]))
+    plt.show()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Make a toy submission")
@@ -154,10 +179,6 @@ if __name__ == '__main__':
                         help="Path to the learning set as CSV file")
     parser.add_argument("--ts", default="data/test_set.csv",
                         help="Path to the test set as CSV file")
-    parser.add_argument("--dt", action="store_true", default=False,
-                        help="Use a decision tree classifier (by default, "
-                             "make a random prediction)")
-    parser.add_argument("--oth", action="store_true", default=False)
 
     args = parser.parse_args()
 
@@ -166,86 +187,114 @@ if __name__ == '__main__':
     # Load test data
     TS = load_from_csv(args.ts)
 
-    if args.dt:
-        # -------------------------- Decision Tree --------------------------- #
+    # Fingerprint creation
+    with measure_time("Creating learning sample fingerprint"):
+        X_WholeSet = create_fingerprints(LS["SMILES"].values)
+    y_WholeSet = LS["ACTIVE"].values
 
-        # LEARNING
-        # Create fingerprint features and output
-        with measure_time("Creating fingerprint"):
-            X_LS = create_fingerprints(LS["SMILES"].values)
-        y_LS = LS["ACTIVE"].values
-
-        # Build the model
-        model = DecisionTreeClassifier()
-
-        with measure_time('Training'):
-            model.fit(X_LS, y_LS)
-
-        # PREDICTION
-        TS = load_from_csv(args.ts)
+    TS = load_from_csv(args.ts)
+    with measure_time("Creating test sample fingerprint"):
         X_TS = create_fingerprints(TS["SMILES"].values)
 
-        # Predict
-        y_pred = model.predict_proba(X_TS)[:,1]
+    # Feature selection
+    _k = 1000
+    with measure_time("Selecting the "+str(_k)+" best features"):
+        featureSelector = SelectKBest(chi2, k=_k)
+        X_WholeSet = featureSelector.fit_transform(X_WholeSet, y_WholeSet)
+        X_TS = featureSelector.transform(X_TS)
 
-        # Estimated AUC of the model
-        auc_predicted = 0.50 # it seems a bit pessimistic, right?
-
-        # Making the submission file
-        fname = make_submission(y_pred, auc_predicted, 'toy_submission_DT')
-        print('Submission file "{}" successfully written'.format(fname))
-
-    elif args.oth:
-        # ------------------------ MY IMPLEMENTATION ------------------------- #
-
-        with measure_time("Creating fingerprint"):
-            X_LS = create_fingerprints(LS["SMILES"].values)
-        y_LS = LS["ACTIVE"].values
-
-        model = RandomForestClassifier(n_estimators=100)
-
-        model.fit(X_LS, y_LS)
-        TS = load_from_csv(args.ts)
-        X_TS = create_fingerprints(TS["SMILES"].values)
-        y_pred = model.predict_proba(X_TS)[:,1]
-        
-        fname = make_submission(y_pred, 0.5, 'randomforest')
-        print('Submission file "{}" successfully written'.format(fname))
-        
-        """model = Sequential()
-        model.add(Dense(64, activation='relu'))
-        model.add(Dense(32, activation='relu'))
-        model.add(Dense(16, activation='relu'))
-        model.add(Dense(1, activation='sigmoid'))
-        model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-        model.fit(X_LS, y_LS, epochs=120, batch_size=100)
+    # Splitting
+    with measure_time("Splitting and shuffling the datas"):
+        X_LS, X_VS, y_LS, y_VS = train_test_split(X_WholeSet, y_WholeSet, test_size=0.33, random_state=42)
 
 
-        TS = load_from_csv(args.ts)
-        X_TS = create_fingerprints(TS["SMILES"].values)
+    WS = list(zip(X_WholeSet, y_WholeSet))
+    LS = list(zip(X_LS, y_LS))
+    VS = list(zip(X_VS, y_VS))
 
-        y_pred = model.predict(X_TS)
-        y_pred = [round(y[0]) for y in y_pred]
+    # Changing 0 to 1 ratio in learning samples
+    ratio = 9
+    LS0 = []
+    LS1 = []
+    for (x, y) in LS:
+        if not y:
+            LS0 += [(x, y)]
+        else:
+            LS1 += [(x, y)]
+    LS0 = LS0[0:round(len(LS1)*ratio)]
+    LS = LS0 + LS1
 
-        fname = make_submission(y_pred, 0, 'keras')
-        print('Submission file "{}" successfully written'.format(fname))"""
+    random.shuffle(WS)
+    random.shuffle(LS)
+    random.shuffle(VS)
 
-    else:
+    X_WS, y_WS = zip(*WS)
+    X_LS, y_LS = zip(*LS)
+    X_VS, y_VS = zip(*VS)
 
-        # ------------------------ Random Prediction ------------------------- #
-        # Predict
-        random_state = 0
-        random_state = check_random_state(random_state)
-        y_pred = random_state.rand(TS.shape[0])
+    # Model creation and assessment
+    models=[]
+    with measure_time("Creating and assessing the models"):
+        for param1 in [8000]:
+            for param2 in ['balanced']:
+                for param3 in [None]:
+                    for param4 in ["not defined"]:
+                        model = RandomForestClassifier(n_estimators=param1, class_weight=param2, max_depth=param3)
+                        model.fit(X_LS, y_LS)
 
-        # Estimated AUC of the model
-        auc_predicted = 0.50 # expected value for random guessing
+                        y_predict = model.predict_proba(X_VS)[:,1]
+                        auc = roc_auc_score(y_VS, y_predict)
 
-        # Making the submission file
-        fname = make_submission(y_pred, auc_predicted, 'toy_submission_random')
-        print('Submission file "{}" successfully written'.format(fname))
+                        models += [{"model": model,
+                                    "param1": param1,
+                                    "param2": param2,
+                                    "param3": param3,
+                                    "param4": param4,
+                                    "auc": auc
+                                    }]
+
+    # Finding the best model
+    best_model = models[0]
+    for model in models:
+        if(model["auc"] >= best_model["auc"]):
+            best_model = model
 
 
+    print("------BEST MODEL-------")
+    print("param1="+str(best_model["param1"]))
+    print("param2="+str(best_model["param2"]))
+    print("param3="+str(best_model["param3"]))
+    print("param4="+str(best_model["param4"]))
+    print("auc="+str(best_model["auc"]))
+    print("-----------------------")
 
 
+    # Plotting charts
+    plot_cm(y_VS, y_predict)
+    plot_roc_auc(y_VS, y_predict)
 
+
+    # Best model fitting
+    with measure_time("Fitting the best model"):
+        best_model["model"].fit(X_WS, y_WS)
+
+
+    # Changing 0 to 1 ratio in final sample
+    WS = list(zip(X_WS, y_WS))
+    WS0 = []
+    WS1 = []
+    for (x, y) in WS:
+        if not y:
+            WS0 += [(x, y)]
+        else:
+            WS1 += [(x, y)]
+    WS0 = WS0[0:round(len(WS1)*ratio)]
+    WS = WS0 + WS1
+    random.shuffle(WS)
+
+    # Predicting and submitting
+    y_pred = best_model["model"].predict_proba(X_TS)[:,1]
+
+    fname = make_submission(y_pred, best_model["auc"]-0.06, 'random_forest')
+    print('Submission file "{}" successfully written'.format(fname))
+    print("Done")
